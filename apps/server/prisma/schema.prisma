@@ -1,0 +1,219 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  EMAIL_VERIFIED
+  ONBOARDING_IN_PROGRESS
+  ACTIVE
+  SUSPENDED
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum OtpPurpose {
+  EMAIL_VERIFICATION
+}
+
+enum OtpStatus {
+  PENDING
+  VERIFIED
+  EXPIRED
+  FAILED
+  SUPERSEDED
+}
+
+model User {
+  id                  String             @id @default(cuid())
+  email               String             @unique @db.VarChar(255)
+  passwordHash        String             @map("password_hash")
+  emailVerifiedAt     DateTime?          @map("email_verified_at")
+  status              UserStatus         @default(PENDING_VERIFICATION)
+  onboardingCompleted Boolean            @default(false) @map("onboarding_completed")
+  lastLoginAt         DateTime?          @map("last_login_at")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+  emailOtps           EmailOtp[]
+  profile             OnboardingProfile?
+  posts               Post[]
+  followers           UserFollow[]       @relation("UserFollowers")
+  following           UserFollow[]       @relation("UserFollowing")
+  postLikes           PostLike[]
+  postBookmarks       PostBookmark[]
+  tempUploads         TempUpload[]
+
+  @@map("users")
+}
+
+model EmailOtp {
+  id           String     @id @default(cuid())
+  userId       String     @map("user_id")
+  purpose      OtpPurpose
+  codeHash     String     @map("code_hash")
+  expiresAt    DateTime   @map("expires_at")
+  lastSentAt   DateTime   @default(now()) @map("last_sent_at")
+  resendCount  Int        @default(0) @map("resend_count")
+  attemptCount Int        @default(0) @map("attempt_count")
+  verifiedAt   DateTime?  @map("verified_at")
+  status       OtpStatus  @default(PENDING)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, status])
+  @@map("email_otps")
+}
+
+model OnboardingProfile {
+  id            String    @id @default(cuid())
+  userId        String    @unique @map("user_id")
+  firstName     String    @map("first_name") @db.VarChar(100)
+  lastName      String    @map("last_name") @db.VarChar(100)
+  username      String    @unique @db.VarChar(30)
+  tanggalLahir  DateTime  @map("tanggal_lahir")
+  tempatLahir   String    @map("tempat_lahir") @db.VarChar(120)
+  gender        Gender
+  pekerjaan     String?   @db.VarChar(120)
+  fotoProfilUrl String?   @map("foto_profil_url") @db.VarChar(500)
+  coverImageUrl String?   @map("cover_image_url") @db.VarChar(500)
+  bio           String?   @db.VarChar(500)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("onboarding_profiles")
+}
+
+model Post {
+  id            String         @id @default(cuid())
+  userId        String         @map("user_id")
+  content       String         @db.Text
+  status        PostStatus     @default(DRAFT) @map("status")
+  processingStatus ProcessingStatus @default(PENDING) @map("processing_status")
+  processingError String?       @map("processing_error") @db.Text
+  mediaUrl      String?        @map("media_url") @db.VarChar(500)
+  likesCount    Int            @default(0) @map("likes_count")
+  commentsCount Int            @default(0) @map("comments_count")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  likes         PostLike[]
+  bookmarks     PostBookmark[]
+  media         PostMedia[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@index([status, processingStatus])
+  @@map("posts")
+}
+
+enum PostStatus {
+  DRAFT
+  PUBLISHED
+  FAILED
+}
+
+enum ProcessingStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model UserFollow {
+  followerId  String   @map("follower_id")
+  followingId String   @map("following_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  follower    User     @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
+  following   User     @relation("UserFollowers", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@id([followerId, followingId])
+  @@index([followingId])
+  @@map("user_follows")
+}
+
+model PostLike {
+  postId     String   @map("post_id")
+  userId     String   @map("user_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  post       Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([postId, userId])
+  @@index([userId])
+  @@map("post_likes")
+}
+
+model PostBookmark {
+  postId     String   @map("post_id")
+  userId     String   @map("user_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  post       Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([postId, userId])
+  @@index([userId])
+  @@map("post_bookmarks")
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+enum UploadStrategy {
+  SINGLE
+  MULTIPART
+}
+
+model PostMedia {
+  id           String    @id @default(cuid())
+  postId       String    @map("post_id")
+  mediaType    MediaType @map("media_type")
+  storageKey   String    @map("storage_key") @db.VarChar(500)
+  publicUrl    String    @map("public_url") @db.VarChar(500)
+  previewImageUrl String? @map("preview_image_url") @db.VarChar(500)
+  mimeType     String    @map("mime_type") @db.VarChar(100)
+  fileSize     Int       @map("file_size")
+  originalName String?   @map("original_name") @db.VarChar(255)
+  width        Int?
+  height       Int?
+  duration     Int?      // For video, in seconds
+  sortOrder    Int       @default(0) @map("sort_order")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  post         Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@map("post_media")
+}
+
+// Temp upload tracking for pre-signed URL flow
+model TempUpload {
+  id           String    @id @default(cuid())
+  userId       String    @map("user_id")
+  tempKey      String    @unique @map("temp_key") @db.VarChar(500)
+  mediaType    MediaType @map("media_type")
+  uploadStrategy UploadStrategy @default(SINGLE) @map("upload_strategy")
+  multipartUploadId String? @map("multipart_upload_id") @db.VarChar(255)
+  mimeType     String    @map("mime_type") @db.VarChar(100)
+  fileSize     Int       @map("file_size")
+  originalName String?   @map("original_name") @db.VarChar(255)
+  expiresAt    DateTime  @map("expires_at")
+  confirmedAt  DateTime? @map("confirmed_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("temp_uploads")
+}

@@ -1,5 +1,8 @@
 "use client";
 
+import { createPortal } from 'react-dom';
+import { useEffect, useState } from 'react';
+
 export interface DeletePostModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -8,10 +11,28 @@ export interface DeletePostModalProps {
 }
 
 export function DeletePostModal({ isOpen, onClose, onConfirm, isDeleting = false }: DeletePostModalProps) {
-  if (!isOpen) return null;
+  const [mounted, setMounted] = useState(false);
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+  useEffect(() => {
+    setMounted(true);
+    return () => setMounted(false);
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isOpen]);
+
+  if (!isOpen || !mounted) return null;
+
+  const modalContent = (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 animate-in fade-in duration-200">
       {/* Backdrop */}
       <div 
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -63,4 +84,6 @@ export function DeletePostModal({ isOpen, onClose, onConfirm, isDeleting = false
       </div>
     </div>
   );
+
+  return createPortal(modalContent, document.body);
 }

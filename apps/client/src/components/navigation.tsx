@@ -37,7 +37,6 @@ export function Navigation() {
           <div className="hidden md:flex items-center gap-8">
             {[
               { label: "Platform", href: "/platform" },
-              { label: "Messenger", href: "/messenger" },
               { label: "Discovery", href: "/discovery" },
               { label: "Tentang Kami", href: "/about" },
             ].map((item) => (

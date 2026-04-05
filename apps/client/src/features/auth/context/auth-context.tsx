@@ -65,6 +65,10 @@ export function AuthProvider({
         const result = await response.json();
         if (result.success && result.data) {
           setUser(result.data);
+          // Store userId in sessionStorage for Socket.io
+          if (typeof window !== 'undefined' && result.data.id) {
+            sessionStorage.setItem('userId', result.data.id);
+          }
           handleNextStep(result.data.nextStep);
           return true;
         }
@@ -72,10 +76,16 @@ export function AuthProvider({
 
       // If refresh fails, clear user state
       setUser(null);
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('userId');
+      }
       return false;
     } catch (error) {
       console.error("Failed to refresh user:", error);
       setUser(null);
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('userId');
+      }
       return false;
     } finally {
       setIsLoading(false);
@@ -92,6 +102,9 @@ export function AuthProvider({
       console.error("Logout error:", error);
     } finally {
       setUser(null);
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('userId');
+      }
       startTransition(() => {
         router.replace("/login");
       });
@@ -109,11 +122,25 @@ export function AuthProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Store userId in sessionStorage when user changes
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (user?.id) {
+        sessionStorage.setItem('userId', user.id);
+      } else {
+        sessionStorage.removeItem('userId');
+      }
+    }
+  }, [user]);
+
   // Listen for session expiry events from API client
   useEffect(() => {
     const handleSessionExpired = () => {
       console.log('Session expired event received, logging out...');
       setUser(null);
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('userId');
+      }
       startTransition(() => {
         router.replace('/login?reason=session-expired');
       });

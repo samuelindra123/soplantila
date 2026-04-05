@@ -1,6 +1,6 @@
 import { apiClient } from "@/lib/api-client";
 import { FullProfile, Pagination, UpdateProfileResponse, UserProfile } from "@/types/api";
-import { Post } from "@/types/social";
+import { Post, MediaItem } from "@/types/social";
 
 export type UserPostsResponse = {
   posts: Post[];
@@ -30,6 +30,20 @@ export const profileService = {
 
   async getUserPosts(userId: string, page = 1, limit = 20): Promise<UserPostsResponse> {
     return apiClient.get<UserPostsResponse>(`/users/${userId}/posts?page=${page}&limit=${limit}`);
+  },
+
+  async getUserMedia(userId: string): Promise<MediaItem[]> {
+    const response = await apiClient.get<UserPostsResponse>(`/users/${userId}/posts?page=1&limit=100`);
+    
+    // Extract all media from posts
+    const allMedia: MediaItem[] = [];
+    response.posts.forEach(post => {
+      if (post.mediaItems && post.mediaItems.length > 0) {
+        allMedia.push(...post.mediaItems);
+      }
+    });
+    
+    return allMedia;
   },
 
   async updateProfile(
@@ -68,6 +82,14 @@ export const profileService = {
 
   async getUserProfileById(userId: string): Promise<FullProfile> {
     return apiClient.get<FullProfile>(`/users/${userId}/profile`);
+  },
+
+  async getFollowers(userId: string): Promise<{ id: string; email: string; profile: UserProfile }[]> {
+    return apiClient.get(`/users/${userId}/followers`);
+  },
+
+  async getFollowing(userId: string): Promise<{ id: string; email: string; profile: UserProfile }[]> {
+    return apiClient.get(`/users/${userId}/following`);
   },
 
   async followUser(userId: string): Promise<{ message: string }> {

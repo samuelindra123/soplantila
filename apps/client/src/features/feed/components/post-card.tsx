@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useToast } from '@/hooks/use-toast';
 import { Post, deletePost } from '../services/feed-service';
 import { formatDistanceToNow } from 'date-fns';
 import VideoPlayer from './video-player';
@@ -17,10 +18,12 @@ import { DeletePostModal } from '@/components/social/delete-post-modal';
 
 interface PostCardProps {
   post: Post;
+  showInFeed?: boolean;
   onDeleted?: () => void;
 }
 
-export default function PostCard({ post, onDeleted }: PostCardProps) {
+export default function PostCard({ post, showInFeed = false, onDeleted }: PostCardProps) {
+  const toast = useToast();
   const [isDeleting, setIsDeleting] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -36,7 +39,7 @@ export default function PostCard({ post, onDeleted }: PostCardProps) {
       onDeleted?.();
     } catch (error) {
       console.error('Failed to delete post:', error);
-      alert('Failed to delete post. Please try again.');
+      toast.error('Failed to delete post. Please try again.');
     } finally {
       setIsDeleting(false);
       setShowDeleteModal(false);
@@ -58,8 +61,17 @@ export default function PostCard({ post, onDeleted }: PostCardProps) {
   const hasMultipleMedia = mediaItems.length > 1;
   const isPosting = post.clientStatus === 'posting';
 
+  // Safety: Ensure author exists
+  const author = post.author || {
+    id: 'unknown',
+    username: 'unknown',
+    displayName: 'Unknown User',
+    avatarUrl: undefined,
+    isVerified: false,
+  };
+
   // Generate initials from display name
-  const initials = post.author.displayName
+  const initials = (author.displayName || 'U')
     .split(' ')
     .filter(Boolean)
     .slice(0, 2)
@@ -84,12 +96,12 @@ export default function PostCard({ post, onDeleted }: PostCardProps) {
       {/* Header */}
       <div className="p-6 pb-4 flex items-start justify-between">
         <div className="flex items-center gap-4 cursor-pointer group/user">
-          <Link href={`/u/${post.author.username}`}>
+          <Link href={`/u/${author.username}`}>
             <div className="h-12 w-12 shrink-0 rounded-[1.25rem] bg-surface-dark overflow-hidden border border-border-soft/50 shadow-sm group-hover/user:shadow-md transition-all">
-              {post.author.avatarUrl ? (
+              {author.avatarUrl ? (
                 <img 
-                  src={post.author.avatarUrl} 
-                  alt={post.author.displayName} 
+                  src={author.avatarUrl} 
+                  alt={author.displayName} 
                   className="h-full w-full object-cover rounded-[1rem] group-hover/user:scale-105 transition-transform duration-500" 
                 />
               ) : (
@@ -101,12 +113,12 @@ export default function PostCard({ post, onDeleted }: PostCardProps) {
           </Link>
           <div className="flex flex-col justify-center">
             <div className="flex items-center gap-1.5">
-              <Link href={`/u/${post.author.username}`}>
+              <Link href={`/u/${author.username}`}>
                 <h4 className="font-bold text-[15px] tracking-tight group-hover/user:text-accent transition-colors">
-                  {post.author.displayName}
+                  {author.displayName}
                 </h4>
               </Link>
-              {post.author.isVerified && (
+              {author.isVerified && (
                 <CheckCircle2Icon className="h-4 w-4 text-accent" />
               )}
               {isPosting && (
@@ -116,62 +128,33 @@ export default function PostCard({ post, onDeleted }: PostCardProps) {
               )}
             </div>
             <div className="flex items-center gap-1.5 text-[12px] text-muted font-medium mt-0.5">
-              <span>@{post.author.username}</span>
+              <span>@{author.username}</span>
               <span className="text-[10px]">•</span>
               <time className="hover:underline cursor-pointer">{timeAgo}</time>
             </div>
           </div>
         </div>
 
-        {/* Menu button */}
-        <div className="relative">
-          <button
-            type="button"
-            onClick={handleMenuToggle}
-            className="p-2 -mt-1 -mr-2 hover:bg-surface-dark rounded-full transition-colors text-muted hover:text-foreground active:scale-95"
-            aria-label="More options"
-          >
-            <MoreHorizontalIcon className="h-5 w-5" />
-          </button>
+        {/* Menu button - hide for own posts in feed */}
+        {!post.isOwner && (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={handleMenuToggle}
+              className="p-2 -mt-1 -mr-2 hover:bg-surface-dark rounded-full transition-colors text-muted hover:text-foreground active:scale-95"
+              aria-label="More options"
+            >
+              <MoreHorizontalIcon className="h-5 w-5" />
+            </button>
 
-          {showMenu && (
-            <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => setShowMenu(false)}
-              />
-              <div className="absolute right-0 top-full mt-1 z-50 bg-surface/98 backdrop-blur-xl border border-border-soft/50 rounded-xl shadow-2xl overflow-hidden min-w-[200px] animate-in fade-in zoom-in-95 duration-150">
-                <div className="py-1">
-                  {post.isOwner && (
-                    <>
-                      <button
-                        onClick={() => {
-                          // TODO: Implement edit functionality
-                          setShowMenu(false);
-                        }}
-                        className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-surface-dark/50 transition-colors text-left group"
-                      >
-                        <svg className="h-[18px] w-[18px] text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                        <span className="text-[14px] font-medium text-foreground">Edit postingan</span>
-                      </button>
-                      <div className="h-px bg-border-soft/30 mx-2" />
-                      <button
-                        onClick={() => {
-                          handleDeleteClick();
-                          setShowMenu(false);
-                        }}
-                        className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-danger/5 transition-colors text-left group"
-                      >
-                        <svg className="h-[18px] w-[18px] text-danger" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                        <span className="text-[14px] font-medium text-danger">Hapus postingan</span>
-                      </button>
-                    </>
-                  )}
-                  {!post.isOwner && (
+            {showMenu && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setShowMenu(false)}
+                />
+                <div className="absolute right-0 top-full mt-1 z-50 bg-surface/98 backdrop-blur-xl border border-border-soft/50 rounded-xl shadow-2xl overflow-hidden min-w-[200px] animate-in fade-in zoom-in-95 duration-150">
+                  <div className="py-1">
                     <button
                       onClick={() => {
                         // TODO: Implement report functionality
@@ -184,12 +167,12 @@ export default function PostCard({ post, onDeleted }: PostCardProps) {
                       </svg>
                       <span className="text-[14px] font-medium text-foreground">Laporkan postingan</span>
                     </button>
-                  )}
+                  </div>
                 </div>
-              </div>
-            </>
-          )}
-        </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Content */}

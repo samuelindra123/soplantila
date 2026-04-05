@@ -9,6 +9,10 @@ import PostCard from './post-card';
 import { getFeed, Post } from '../services/feed-service';
 import { useRouter } from 'next/navigation';
 import { ApiClientError } from '@/lib/api-client';
+import { useFeedSSE } from '../hooks/use-feed-sse';
+import { FeedSkeleton, FeedSkeletonInline } from './feed-skeleton';
+import { FeedStatusBar } from './feed-status-bar';
+import { useToast } from './toast';
 
 const FEED_CACHE_PREFIX = 'feed-cache';
 const CACHE_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
@@ -96,7 +100,7 @@ function deduplicatePosts(posts: Post[]): Post[] {
 }
 
 export default function FeedContent() {
-  const { user, isLoading: authLoading } = useAuth();
+  const { user, isLoading: authLoading, refreshUser } = useAuth();
   const router = useRouter();
   const [posts, setPosts] = useState<Post[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -106,6 +110,10 @@ export default function FeedContent() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [sessionCheckFailed, setSessionCheckFailed] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [sseConnected, setSseConnected] = useState(false);
+  const [newPostsAvailable, setNewPostsAvailable] = useState(0);
+  const { showToast, ToastComponent } = useToast();
+  const [hasTriedTokenRefresh, setHasTriedTokenRefresh] = useState(false);
   
   // Track the last user ID we fetched for
   const lastFetchedUserIdRef = useRef<string | null>(null);
@@ -113,10 +121,16 @@ export default function FeedContent() {
   const initialLoadCompleteRef = useRef(false);
   // Track pending refresh
   const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Track polling interval
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // Track pending SSE posts
+  const pendingSSEPostsRef = useRef<Post[]>([]);
 
   const loadFeed = useCallback(async (pageNum: number, append = false, silent = false) => {
     try {
-      console.log('[Feed] Loading feed:', { pageNum, append, silent, currentPostsCount: posts.length });
+      // Use functional update to avoid dependency on posts.length
+      const currentPostsCount = append ? 0 : posts.length; // Only log, don't use in logic
+      console.log('[Feed] Loading feed:', { pageNum, append, silent, currentPostsCount });
       
       if (!silent) {
         if (pageNum === 1) setIsLoading(true);
@@ -183,6 +197,16 @@ export default function FeedContent() {
           
           // Normal refresh: replace with server data
           const merged = deduplicatePosts([...optimisticPosts, ...result.posts]);
+          
+          // Only update if data actually changed
+          const currentIds = prev.map(p => p.id).sort().join(',');
+          const newIds = merged.map(p => p.id).sort().join(',');
+          
+          if (currentIds === newIds) {
+            console.log('[Feed] Posts unchanged, skipping update');
+            return prev;
+          }
+          
           console.log('[Feed] Replaced posts:', { 
             optimisticCount: optimisticPosts.length, 
             serverCount: result.posts.length, 
@@ -203,26 +227,50 @@ export default function FeedContent() {
       }
 
       initialLoadCompleteRef.current = true;
+      setHasTriedTokenRefresh(false); // Reset on successful load
     } catch (err) {
       console.error('[Feed] Load error:', err);
       
       // Handle 401 specifically
       if (err instanceof ApiClientError && err.status === 401) {
+        // Try token refresh once
+        if (!hasTriedTokenRefresh && refreshUser) {
+          console.log('[Feed] Attempting token refresh...');
+          setHasTriedTokenRefresh(true);
+          
+          try {
+            const refreshed = await refreshUser();
+            if (refreshed) {
+              console.log('[Feed] Token refreshed, retrying feed load');
+              showToast('Sesi diperbarui, memuat ulang feed...', 'info');
+              // Retry the same request
+              return loadFeed(pageNum, append, silent);
+            }
+          } catch (refreshError) {
+            console.error('[Feed] Token refresh failed:', refreshError);
+          }
+        }
+        
+        // If refresh failed or already tried, redirect to login
         setSessionCheckFailed(true);
-        setError('Your session has expired. Please login again.');
+        setError('Sesi Anda telah berakhir. Silakan login kembali.');
+        showToast('Sesi berakhir, mengalihkan ke login...', 'warning');
+        
+        setTimeout(() => {
+          router.push('/login?reason=session-expired');
+        }, 2000);
+        
         if (!silent) {
           setPosts([]);
         }
         return;
       }
       
-      const message = err instanceof Error ? err.message : 'Failed to load feed';
+      const message = err instanceof Error ? err.message : 'Gagal memuat feed';
       if (!silent) {
         setError(message);
-        // Don't clear posts if we have cached data
-        if (posts.length === 0) {
-          setPosts([]);
-        }
+        // Don't clear posts if we have cached data - use functional update
+        setPosts((prev) => prev.length === 0 ? [] : prev);
       }
     } finally {
       if (!silent) {
@@ -231,7 +279,7 @@ export default function FeedContent() {
       }
       setIsRefreshing(false);
     }
-  }, [user?.id, posts.length]);
+  }, [user?.id, hasTriedTokenRefresh, refreshUser, router, showToast]); // REMOVED posts.length
 
   useEffect(() => {
     console.log('[Feed] useEffect triggered:', { 
@@ -261,22 +309,46 @@ export default function FeedContent() {
       }
     }
     
+    // Setup real-time polling when user is logged in
+    if (user?.id && initialLoadCompleteRef.current) {
+      console.log('[Feed] Setting up real-time polling (15s interval)');
+      
+      // Clear existing interval
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+      
+      // Poll every 15 seconds for new posts
+      pollingIntervalRef.current = setInterval(() => {
+        console.log('[Feed] Polling for new posts...');
+        void loadFeed(1, false, true); // Silent refresh
+      }, 15000); // 15 seconds
+    }
+    
     // Reset when user logs out
     if (!user) {
       console.log('[Feed] User logged out, resetting state');
       lastFetchedUserIdRef.current = null;
       initialLoadCompleteRef.current = false;
-      setPosts([]);
-      setError(null);
-      setIsLoading(false);
-      setSessionCheckFailed(false);
-      setIsRefreshing(false);
       
       // Clear refresh timeout
       if (refreshTimeoutRef.current) {
         clearTimeout(refreshTimeoutRef.current);
         refreshTimeoutRef.current = null;
       }
+      
+      // Clear polling interval
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      
+      // Reset state AFTER clearing timers to avoid triggering effects
+      setPosts([]);
+      setError(null);
+      setIsLoading(false);
+      setSessionCheckFailed(false);
+      setIsRefreshing(false);
     }
     
     // Cleanup on unmount
@@ -284,8 +356,92 @@ export default function FeedContent() {
       if (refreshTimeoutRef.current) {
         clearTimeout(refreshTimeoutRef.current);
       }
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
     };
-  }, [user?.id, loadFeed]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]); // loadFeed is stable via useCallback, don't add to deps
+
+  // SSE: Handle real-time feed updates
+  const handleSSENewPost = useCallback((event: any) => {
+    console.log('[SSE] New post received:', event);
+    
+    if (!event.data) return;
+    
+    const newPost: Post = {
+      ...event.data,
+      clientStatus: undefined, // Server post, not optimistic
+    };
+
+    // Add to pending posts and show notification
+    pendingSSEPostsRef.current = [newPost, ...pendingSSEPostsRef.current];
+    setNewPostsAvailable((prev) => prev + 1);
+  }, []);
+
+  const loadNewPosts = useCallback(() => {
+    console.log('[Feed] Loading new posts from SSE:', pendingSSEPostsRef.current.length);
+    
+    setPosts((prev) => {
+      const merged = deduplicatePosts([...pendingSSEPostsRef.current, ...prev]);
+      return merged;
+    });
+    
+    // Clear pending posts
+    pendingSSEPostsRef.current = [];
+    setNewPostsAvailable(0);
+  }, []);
+
+  // Setup SSE connection
+  const { isConnected, sseStatus, isEndpointMissing, reconnect } = useFeedSSE({
+    enabled: !!user && initialLoadCompleteRef.current,
+    onConnected: () => {
+      console.log('[SSE] Connected successfully');
+      setSseConnected(true);
+    },
+    onNewPost: handleSSENewPost,
+    onDeletePost: (event) => {
+      console.log('[SSE] Post deleted:', event.postId);
+      if (event.postId) {
+        setPosts((prev) => prev.filter((p) => p.id !== event.postId));
+      }
+    },
+    onError: (error) => {
+      console.error('[SSE] Connection error:', error);
+      setSseConnected(false);
+      
+      // If auth error, don't show error to user (they need to login)
+      if (error?.message?.includes('Authentication failed')) {
+        console.log('[SSE] Auth failed, user needs to login');
+      }
+    },
+  });
+
+  useEffect(() => {
+    setSseConnected(isConnected);
+  }, [isConnected]);
+
+  // Handle SSE auth failed - try to refresh token
+  const handleSSEAuthRetry = useCallback(async () => {
+    if (!refreshUser) return;
+    
+    console.log('[SSE] Attempting token refresh for SSE reconnect');
+    showToast('Memperbarui sesi...', 'info');
+    
+    try {
+      const refreshed = await refreshUser();
+      if (refreshed) {
+        console.log('[SSE] Token refreshed, reconnecting SSE');
+        showToast('Sesi diperbarui, menghubungkan ulang...', 'success');
+        reconnect();
+      } else {
+        showToast('Gagal memperbarui sesi', 'error');
+      }
+    } catch (error) {
+      console.error('[SSE] Token refresh failed:', error);
+      showToast('Gagal memperbarui sesi', 'error');
+    }
+  }, [refreshUser, reconnect, showToast]);
 
   const createOptimisticPost = useRef((draft: Post) => {
     console.log('[Feed] Creating optimistic post:', { postId: draft.id, content: draft.content.substring(0, 50) });
@@ -304,11 +460,9 @@ export default function FeedContent() {
       content: createdPost?.content?.substring(0, 50)
     });
     
-    if (createdPost) {
-      // Simple approach: Just refetch from server to ensure consistency
-      console.log('[Feed] Refetching feed from server after post creation');
-      void loadFeed(1, false, false);
-    }
+    // Always refetch to ensure consistency
+    console.log('[Feed] Refetching feed from server after post creation');
+    void loadFeed(1, false, false);
   }, [loadFeed]);
 
   const handlePostSettled = useCallback((temporaryId: string, createdPost?: Post) => {
@@ -420,28 +574,102 @@ export default function FeedContent() {
           
           {/* Page Header */}
           <header className="mb-8 lg:mb-12 space-y-2 animate-reveal sticky top-0 bg-background/80 backdrop-blur-xl z-10 py-4 -mx-4 px-4 sm:-mx-6 sm:px-6 border-b border-border-soft/50">
-            <h1 className="text-2xl lg:text-3xl font-bold tracking-tight">Home</h1>
-            {isRefreshing ? (
-              <p className="text-[12px] font-medium text-muted">
-                Updating your feed in background...
-              </p>
-            ) : null}
+            <div className="flex items-center justify-between">
+              <h1 className="text-2xl lg:text-3xl font-bold tracking-tight">Home</h1>
+              <div className="flex items-center gap-3">
+                {/* SSE Connection Status */}
+                {sseConnected ? (
+                  <div className="flex items-center gap-2 text-[11px] font-medium text-success">
+                    <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
+                    <span>Live</span>
+                  </div>
+                ) : user && initialLoadCompleteRef.current ? (
+                  <div className="flex items-center gap-2 text-[11px] font-medium text-muted">
+                    <div className="w-2 h-2 rounded-full bg-muted" />
+                    <span>Connecting...</span>
+                  </div>
+                ) : null}
+                
+                {/* Refresh Indicator */}
+                {isRefreshing && (
+                  <div className="flex items-center gap-2 text-[11px] font-medium text-accent">
+                    <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+                    <span>Updating...</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            <p className="text-[12px] font-medium text-muted">
+              {sseConnected 
+                ? 'Real-time updates active' 
+                : isRefreshing 
+                ? 'Checking for new posts...' 
+                : 'Your feed updates automatically'}
+            </p>
           </header>
 
           {/* Composer */}
           <div className="mb-10 animate-reveal">
             <PostComposer
               onPostCreated={handlePostCreated}
-              onPostQueued={(draft) => createOptimisticPost.current(draft)}
-              onPostSettled={handlePostSettled}
             />
           </div>
+
+          {/* SSE Status Banner - Sticky at top for instant feedback */}
+          {sseStatus === 'auth_failed' && (
+            <div className="sticky top-0 z-20 mb-4 animate-slide-down">
+              <div className="flex items-center justify-between px-4 py-3 bg-yellow-50 border border-yellow-200 rounded-2xl text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="text-yellow-600">⚠️</span>
+                  <span className="text-yellow-800 font-medium">Update otomatis tidak aktif</span>
+                </div>
+                <button
+                  onClick={reconnect}
+                  className="text-yellow-700 text-xs font-semibold hover:text-yellow-900 underline transition-colors"
+                >
+                  Coba sambung ulang
+                </button>
+              </div>
+            </div>
+          )}
+
+          {sseStatus === 'connecting' && !sseConnected && (
+            <div className="sticky top-0 z-20 mb-4 animate-slide-down">
+              <div className="flex items-center gap-2 px-4 py-3 bg-blue-50 border border-blue-200 rounded-2xl text-sm">
+                <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                <span className="text-blue-700 font-medium">Menyambungkan realtime...</span>
+              </div>
+            </div>
+          )}
+
+          {/* SSE Status Bar (subtle, below composer) */}
+          <FeedStatusBar
+            status={sseStatus}
+            isEndpointMissing={isEndpointMissing}
+            onRetry={reconnect}
+            onRefreshAuth={handleSSEAuthRetry}
+          />
+
+          {/* New Posts Available Button */}
+          {newPostsAvailable > 0 && (
+            <div className="mb-6 flex justify-center animate-slide-down">
+              <button
+                onClick={loadNewPosts}
+                className="px-6 py-3 rounded-full bg-accent text-white font-semibold hover:bg-accent-strong transition-all active:scale-95 shadow-lg flex items-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                </svg>
+                <span>{newPostsAvailable} postingan baru</span>
+              </button>
+            </div>
+          )}
 
           <div className="h-px bg-border-soft/50 w-full mb-8" />
 
           {/* Feed */}
           {isLoading ? (
-            <FeedSkeleton />
+            <FeedSkeleton count={5} />
           ) : error ? (
             <div className="bg-surface border border-border-soft rounded-[2.5rem] p-10 text-center glass-strong animate-reveal">
               <div className="w-16 h-16 mx-auto mb-5 rounded-full bg-danger/10 flex items-center justify-center">
@@ -449,12 +677,13 @@ export default function FeedContent() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
               </div>
+              <h3 className="text-[17px] font-bold text-foreground mb-2">Gagal memuat feed</h3>
               <p className="text-danger text-[15px] font-medium mb-5">{error}</p>
               <button
                 onClick={() => loadFeed(1)}
                 className="px-6 py-2.5 rounded-full text-[13px] font-bold tracking-wider text-white bg-accent hover:bg-accent-strong transition-all active:scale-95"
               >
-                Try Again
+                Coba Lagi
               </button>
             </div>
           ) : posts.length === 0 ? (
@@ -462,33 +691,33 @@ export default function FeedContent() {
           ) : (
             <>
               <div className="space-y-6 sm:space-y-8">
-                {posts.map((post, index) => (
-                  <div 
-                    key={post.id} 
-                    className="animate-reveal"
-                    style={{ animationDelay: `${index * 100}ms` }}
-                  >
-                    <PostCard post={post} onDeleted={handlePostDeleted} />
-                  </div>
-                ))}
+                {posts.map((post, index) => {
+                  // Check if this is a new post from SSE (recently added)
+                  const isNewPost = pendingSSEPostsRef.current.some(p => p.id === post.id);
+                  
+                  return (
+                    <div 
+                      key={post.id} 
+                      className={isNewPost ? 'animate-slide-in' : 'animate-reveal'}
+                      style={{ animationDelay: isNewPost ? '0ms' : `${index * 100}ms` }}
+                    >
+                      <PostCard post={post} showInFeed={true} onDeleted={handlePostDeleted} />
+                    </div>
+                  );
+                })}
               </div>
 
-              {/* Load more */}
-              {hasMore && (
+              {/* Load more skeleton when loading */}
+              {isLoadingMore && <FeedSkeletonInline count={2} />}
+
+              {/* Load more button */}
+              {hasMore && !isLoadingMore && (
                 <div className="text-center py-6">
                   <button
                     onClick={loadMore}
-                    disabled={isLoadingMore}
-                    className="px-8 py-3 rounded-full text-[13px] font-bold tracking-wider text-muted bg-surface-dark hover:bg-surface-dark/80 hover:text-foreground border border-border-soft transition-all active:scale-95 disabled:opacity-50"
+                    className="px-8 py-3 rounded-full text-[13px] font-bold tracking-wider text-muted bg-surface-dark hover:bg-surface-dark/80 hover:text-foreground border border-border-soft transition-all active:scale-95"
                   >
-                    {isLoadingMore ? (
-                      <span className="flex items-center gap-2">
-                        <span className="w-4 h-4 rounded-full border-2 border-accent/30 border-t-accent animate-spin" />
-                        Loading...
-                      </span>
-                    ) : (
-                      'Load More'
-                    )}
+                    Muat Lebih Banyak
                   </button>
                 </div>
               )}
@@ -497,13 +726,16 @@ export default function FeedContent() {
               {!hasMore && (
                 <div className="py-16 text-center">
                   <div className="h-1.5 w-12 bg-border-soft mx-auto rounded-full mb-6" />
-                  <p className="text-[12px] font-bold text-muted uppercase tracking-[0.2em]">You&apos;re all caught up</p>
+                  <p className="text-[12px] font-bold text-muted uppercase tracking-[0.2em]">Anda sudah melihat semua</p>
                 </div>
               )}
             </>
           )}
         </div>
       </main>
+
+      {/* Toast */}
+      {ToastComponent}
 
       {/* Right Panel - Suggestions */}
       <aside className="fixed right-0 top-0 h-screen w-[340px] hidden xl:flex flex-col py-8 px-6 border-l border-border-soft glass-strong z-20">
@@ -589,43 +821,6 @@ export default function FeedContent() {
   );
 }
 
-function FeedSkeleton() {
-  return (
-    <div className="space-y-6 sm:space-y-8">
-      {/* Post skeletons */}
-      {[1, 2, 3].map((i) => (
-        <div
-          key={i}
-          className="bg-surface border border-border-soft rounded-[2.5rem] overflow-hidden glass-strong"
-          style={{ animationDelay: `${i * 100}ms` }}
-        >
-          <div className="p-6 pb-4">
-            <div className="flex gap-4">
-              <div className="w-12 h-12 rounded-[1.25rem] bg-surface-dark animate-pulse" />
-              <div className="flex-1 space-y-2">
-                <div className="h-4 w-32 bg-surface-dark rounded-lg animate-pulse" />
-                <div className="h-3 w-24 bg-surface-dark rounded-lg animate-pulse" />
-              </div>
-            </div>
-          </div>
-          <div className="px-6 pb-5 space-y-3">
-            <div className="h-4 w-full bg-surface-dark rounded-lg animate-pulse" />
-            <div className="h-4 w-3/4 bg-surface-dark rounded-lg animate-pulse" />
-            <div className="h-4 w-1/2 bg-surface-dark rounded-lg animate-pulse" />
-          </div>
-          <div className="px-6 py-4 border-t border-border-soft/30 bg-surface-dark/30">
-            <div className="flex gap-6">
-              <div className="h-9 w-16 bg-surface-dark rounded-full animate-pulse" />
-              <div className="h-9 w-16 bg-surface-dark rounded-full animate-pulse" />
-              <div className="h-9 w-9 bg-surface-dark rounded-full animate-pulse" />
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function EmptyFeed() {
   return (
     <div className="bg-surface border border-border-soft rounded-[2.5rem] p-12 text-center glass-strong animate-reveal">
@@ -645,10 +840,10 @@ function EmptyFeed() {
         </svg>
       </div>
       <h3 className="text-[19px] font-bold text-foreground tracking-tight mb-2">
-        Your feed is empty
+        Feed Anda kosong
       </h3>
       <p className="text-muted text-[15px] max-w-xs mx-auto leading-relaxed">
-        Be the first to share something! Create a post above to get started.
+        Jadilah yang pertama berbagi sesuatu! Buat postingan di atas untuk memulai.
       </p>
     </div>
   );

@@ -10,11 +10,12 @@ import { useEffect, useTransition, useState, useCallback } from "react";
 import { ProfileHeader } from "@/features/profile/components/profile-header";
 import { ProfileTabs, ProfileTab } from "@/features/profile/components/profile-tabs";
 import { ProfilePosts } from "@/features/profile/components/profile-posts";
+import { ProfileMedia } from "@/features/profile/components/profile-media";
 import { ProfileEmptyTab } from "@/features/profile/components/profile-empty-tab";
 import { EditProfileModal } from "@/features/profile/components/edit-profile-modal";
 import { profileService } from "@/features/profile/services/profile-service";
 import { FullProfile } from "@/types/api";
-import { Post } from "@/types/social";
+import { Post, MediaItem } from "@/types/social";
 
 type ProfileLoadStatus = "loading" | "ready" | "unauthorized" | "not_found" | "error";
 
@@ -98,6 +99,11 @@ export default function ProfilePage() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [postsLoading, setPostsLoading] = useState(false);
   const [postsError, setPostsError] = useState<string | null>(null);
+  
+  // Media state
+  const [media, setMedia] = useState<MediaItem[]>([]);
+  const [mediaLoading, setMediaLoading] = useState(false);
+  const [mediaError, setMediaError] = useState<string | null>(null);
   
   // Edit profile modal state
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -192,6 +198,27 @@ export default function ProfilePage() {
     }
   }, [user]);
 
+  // Fetch user media
+  const fetchMedia = useCallback(async () => {
+    if (!user) return;
+    
+    setMediaLoading(true);
+    setMediaError(null);
+    
+    try {
+      const data = await profileService.getUserMedia(user.id);
+      setMedia(data);
+    } catch (err) {
+      if (err instanceof ApiClientError && err.status === 401) {
+        setMediaError("Sesi Anda berakhir.");
+        return;
+      }
+      setMediaError("Gagal memuat media.");
+    } finally {
+      setMediaLoading(false);
+    }
+  }, [user]);
+
   // Load data when auth state changes
   useEffect(() => {
     if (!user) {
@@ -208,11 +235,14 @@ export default function ProfilePage() {
       const status = await fetchProfile();
       if (status === "ready") {
         await fetchPosts();
+        if (activeTab === "media") {
+          await fetchMedia();
+        }
       }
     };
 
     void loadData();
-  }, [user, fetchProfile, fetchPosts]);
+  }, [user, fetchProfile, fetchPosts, fetchMedia, activeTab]);
   
   // Handlers for edit profile modal
   const handleOpenEditModal = () => setIsEditModalOpen(true);
@@ -388,7 +418,23 @@ export default function ProfilePage() {
                   <ProfilePosts posts={posts} />
                 )
               )}
-              {activeTab === "media" && <ProfileEmptyTab type="media" />}
+              {activeTab === "media" && (
+                mediaLoading ? (
+                  <ProfileMedia media={[]} isLoading={true} />
+                ) : mediaError ? (
+                  <div className="py-16 flex flex-col items-center gap-4 text-center px-4">
+                    <p className="text-muted text-sm sm:text-base">{mediaError}</p>
+                    <button
+                      onClick={fetchMedia}
+                      className="px-4 py-2 rounded-full bg-accent text-white text-sm font-medium hover:bg-accent-strong transition-colors"
+                    >
+                      Try Again
+                    </button>
+                  </div>
+                ) : (
+                  <ProfileMedia media={media} />
+                )
+              )}
               {activeTab === "about" && <ProfileEmptyTab type="about" />}
               {activeTab === "likes" && <ProfileEmptyTab type="likes" />}
             </div>

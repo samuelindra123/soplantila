@@ -11,6 +11,7 @@ import { ProfileHeader } from "@/features/profile/components/profile-header";
 import { ProfileTabs, ProfileTab } from "@/features/profile/components/profile-tabs";
 import { ProfilePosts } from "@/features/profile/components/profile-posts";
 import { ProfileEmptyTab } from "@/features/profile/components/profile-empty-tab";
+import { useToast } from "@/hooks/use-toast";
 import { profileService } from "@/features/profile/services/profile-service";
 import { FullProfile } from "@/types/api";
 import { Post } from "@/types/social";
@@ -18,6 +19,7 @@ import { Post } from "@/types/social";
 type ProfileLoadStatus = "loading" | "ready" | "unauthorized" | "not_found" | "error";
 
 export default function UserProfilePage() {
+  const toast = useToast();
   const { user, isLoading: authLoading } = useAuth();
   const router = useRouter();
   const params = useParams();
@@ -163,7 +165,7 @@ export default function UserProfilePage() {
       }
     } catch (err) {
       console.error('Follow/unfollow error:', err);
-      alert('Failed to update follow status. Please try again.');
+      toast.error('Failed to update follow status. Please try again.');
     } finally {
       setFollowLoading(false);
     }
@@ -261,11 +263,9 @@ export default function UserProfilePage() {
         <div className="pb-6">
           <ProfileHeader 
             profile={profile.profile}
+            userId={profile.id}
             isOwnProfile={false}
             stats={profile.stats}
-            isFollowing={isFollowing}
-            onFollowToggle={handleFollowToggle}
-            followLoading={followLoading}
           />
         </div>
 

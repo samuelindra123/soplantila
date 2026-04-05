@@ -40,6 +40,7 @@ export type ProfileStats = {
   posts: number;
   followers: number;
   following: number;
+  friends?: number;
   isFollowing?: boolean;
 };
 

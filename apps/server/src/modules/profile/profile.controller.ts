@@ -20,8 +20,11 @@ export class ProfileController {
   }
 
   @Get(':username')
-  async getProfileByUsername(@Param('username') username: string) {
-    const profile = await this.profileService.getProfileByUsername(username);
+  async getProfileByUsername(
+    @Param('username') username: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    const profile = await this.profileService.getProfileByUsername(username, user.sub);
 
     return {
       message: 'Profile fetched successfully.',

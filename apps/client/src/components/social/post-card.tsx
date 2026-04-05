@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState } from "react";
+import { useToast } from "@/hooks/use-toast";
 import { Post } from "@/types/social";
 import {
   BookmarkIcon,
@@ -12,13 +13,16 @@ import {
 } from "@/components/ui/icons";
 import { PostMenu } from "./post-menu";
 import { DeletePostModal } from "./delete-post-modal";
+import { EditPostModal } from "./edit-post-modal";
 
-export function PostCard({ post }: { post: Post }) {
+export function PostCard({ post, showInFeed = false }: { post: Post; showInFeed?: boolean }) {
+  const toast = useToast();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  
   // Handle both post.user and post.author for backwards compatibility
   const user = post.user || (post as any).author;
   
@@ -32,17 +36,15 @@ export function PostCard({ post }: { post: Post }) {
     .split(" ")
     .filter(Boolean)
     .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
+    .map((part: string) => part[0]?.toUpperCase() ?? "")
     .join("");
 
+  const isOwnPost = post.isOwner ?? false;
+  
+  // Hide menu button for own posts in feed, show for others' posts
+  const shouldShowMenuButton = showInFeed ? !isOwnPost : true;
+
   const handleMenuToggle = () => {
-    if (!isMenuOpen && menuButtonRef.current) {
-      const rect = menuButtonRef.current.getBoundingClientRect();
-      setMenuPosition({
-        top: rect.bottom + 4,
-        right: window.innerWidth - rect.right,
-      });
-    }
     setIsMenuOpen(!isMenuOpen);
   };
 
@@ -50,14 +52,58 @@ export function PostCard({ post }: { post: Post }) {
     setIsDeleteModalOpen(true);
   };
 
+  const handleEditClick = () => {
+    setIsEditModalOpen(true);
+  };
+
+  const handleEditConfirm = async (newContent: string) => {
+    setIsEditing(true);
+    try {
+      const response = await fetch(`/api/backend/posts/${post.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content: newContent }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update post');
+      }
+
+      // Refresh page to show updated post
+      window.location.reload();
+    } catch (error) {
+      console.error('Error updating post:', error);
+      toast.error('Gagal mengupdate postingan. Silakan coba lagi.');
+    } finally {
+      setIsEditing(false);
+      setIsEditModalOpen(false);
+    }
+  };
+
   const handleDeleteConfirm = async () => {
     setIsDeleting(true);
-    // TODO: Implement actual delete API call
-    await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API call
-    console.log("Deleting post:", post.id);
-    setIsDeleting(false);
-    setIsDeleteModalOpen(false);
-    // TODO: Refresh posts or remove from list
+    try {
+      await fetch(`/api/backend/posts/${post.id}`, {
+        method: 'DELETE',
+      });
+      
+      // Refresh page to show updated posts
+      window.location.reload();
+    } catch (error) {
+      console.error('Error deleting post:', error);
+      toast.error('Gagal menghapus postingan. Silakan coba lagi.');
+    } finally {
+      setIsDeleting(false);
+      setIsDeleteModalOpen(false);
+    }
+  };
+
+  const handleReportClick = () => {
+    // TODO: Implement report functionality
+    console.log("Reporting post:", post.id);
+    setIsMenuOpen(false);
   };
 
   return (
@@ -85,28 +131,64 @@ export function PostCard({ post }: { post: Post }) {
             </div>
           </div>
         </div>
-        <div className="relative">
-          <button 
-            ref={menuButtonRef}
-            onClick={handleMenuToggle}
-            className="p-2 -mt-1 -mr-2 hover:bg-surface-dark rounded-full transition-colors text-muted hover:text-foreground active:scale-95" 
-            aria-label="More options"
-          >
-            <MoreHorizontalIcon className="h-5 w-5" />
-          </button>
-          <PostMenu
-            isOpen={isMenuOpen}
-            onClose={() => setIsMenuOpen(false)}
-            onDelete={handleDeleteClick}
-            isOwnPost={true}
-            position={menuPosition}
-          />
-        </div>
+        {shouldShowMenuButton && (
+          <div className="relative">
+            <button 
+              onClick={handleMenuToggle}
+              className="p-2 -mt-1 -mr-2 hover:bg-surface-dark rounded-full transition-colors text-muted hover:text-foreground active:scale-95" 
+              aria-label="More options"
+            >
+              <MoreHorizontalIcon className="h-5 w-5" />
+            </button>
+            <PostMenu
+              isOpen={isMenuOpen}
+              onClose={() => setIsMenuOpen(false)}
+              onDelete={handleDeleteClick}
+              onEdit={handleEditClick}
+              onReport={handleReportClick}
+              isOwnPost={isOwnPost}
+              showInFeed={showInFeed}
+            />
+          </div>
+        )}
       </div>
 
       <div className="px-6 pb-5">
         <p className="text-foreground/95 leading-relaxed text-[15px] mb-5 whitespace-pre-wrap font-normal">{post.content}</p>
-        {post.media && (
+        
+        {/* Render media items */}
+        {post.mediaItems && post.mediaItems.length > 0 && (
+          <div className="space-y-3">
+            {post.mediaItems.map((media) => (
+              <div 
+                key={media.id} 
+                className="rounded-[2rem] overflow-hidden border border-border-soft/50 bg-surface-dark group-hover:shadow-premium transition-all duration-700"
+              >
+                {media.mediaType === 'image' ? (
+                  <img
+                    src={media.url}
+                    alt="Post media"
+                    className="w-full h-full object-cover max-h-[500px] group-hover:scale-[1.02] transition-transform duration-1000 ease-out"
+                    loading="lazy"
+                  />
+                ) : media.mediaType === 'video' ? (
+                  <video
+                    src={media.url}
+                    poster={media.previewImageUrl}
+                    controls
+                    className="w-full h-full object-cover max-h-[500px]"
+                    preload="metadata"
+                  >
+                    Your browser does not support the video tag.
+                  </video>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+        
+        {/* Fallback for legacy single media field */}
+        {(!post.mediaItems || post.mediaItems.length === 0) && post.media && (
           <div className="rounded-[2rem] overflow-hidden border border-border-soft/50 bg-surface-dark group-hover:shadow-premium transition-all duration-700">
             <img
               src={post.media}
@@ -151,6 +233,15 @@ export function PostCard({ post }: { post: Post }) {
         onClose={() => setIsDeleteModalOpen(false)}
         onConfirm={handleDeleteConfirm}
         isDeleting={isDeleting}
+      />
+
+      {/* Edit Modal */}
+      <EditPostModal
+        isOpen={isEditModalOpen}
+        onClose={() => setIsEditModalOpen(false)}
+        onConfirm={handleEditConfirm}
+        currentContent={post.content}
+        isEditing={isEditing}
       />
     </article>
   );

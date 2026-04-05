@@ -16,6 +16,8 @@ import { PostsModule } from './modules/posts/posts.module';
 import { ProfileModule } from './modules/profile/profile.module';
 import { UploadModule } from './modules/upload/upload.module';
 import { UsersModule } from './modules/users/users.module';
+import { FriendshipModule } from './modules/friendship/friendship.module';
+import { MessagingModule } from './modules/messaging/messaging.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { QueueModule } from './queue/queue.module';
 
@@ -46,6 +48,8 @@ import { QueueModule } from './queue/queue.module';
     HealthModule,
     PostsModule,
     ProfileModule,
+    FriendshipModule,
+    MessagingModule,
   ],
   providers: [
     {

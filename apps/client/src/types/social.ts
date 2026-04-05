@@ -11,14 +11,29 @@ export type PostUser = {
   isVerified?: boolean;
 };
 
+export type MediaItem = {
+  id: string;
+  mediaType: 'image' | 'video';
+  url: string;
+  previewImageUrl?: string;
+  mimeType: string;
+  fileSize: number;
+  width?: number | null;
+  height?: number | null;
+  duration?: number | null;
+};
+
 export type Post = {
   id: string;
-  user: PostUser;
+  user?: PostUser; // For compatibility
+  author?: PostUser; // Backend sends this
   content: string;
-  media?: string;
+  media?: string; // Legacy field
+  mediaItems?: MediaItem[]; // New multi-media field
   likes: number;
   comments: number;
   isLiked?: boolean;
   isBookmarked?: boolean;
+  isOwner?: boolean;
   createdAt: string;
 };

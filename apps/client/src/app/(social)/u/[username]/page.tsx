@@ -10,10 +10,11 @@ import { useEffect, useState, useCallback } from "react";
 import { ProfileHeader } from "@/features/profile/components/profile-header";
 import { ProfileTabs, ProfileTab } from "@/features/profile/components/profile-tabs";
 import { ProfilePosts } from "@/features/profile/components/profile-posts";
+import { ProfileMedia } from "@/features/profile/components/profile-media";
 import { ProfileEmptyTab } from "@/features/profile/components/profile-empty-tab";
 import { profileService } from "@/features/profile/services/profile-service";
 import { FullProfile } from "@/types/api";
-import { Post } from "@/types/social";
+import { Post, MediaItem } from "@/types/social";
 
 type ProfileLoadStatus = "loading" | "ready" | "unauthorized" | "not_found" | "error";
 
@@ -35,9 +36,10 @@ export default function UsernameProfilePage() {
   const [postsLoading, setPostsLoading] = useState(false);
   const [postsError, setPostsError] = useState<string | null>(null);
   
-  // Follow state
-  const [isFollowing, setIsFollowing] = useState(false);
-  const [followLoading, setFollowLoading] = useState(false);
+  // Media state
+  const [media, setMedia] = useState<MediaItem[]>([]);
+  const [mediaLoading, setMediaLoading] = useState(false);
+  const [mediaError, setMediaError] = useState<string | null>(null);
 
   // Check if viewing own profile and redirect immediately
   const isOwnProfile = user?.profile?.username === username;
@@ -62,7 +64,6 @@ export default function UsernameProfilePage() {
     try {
       const data = await profileService.getProfileByUsername(username);
       setProfile(data);
-      setIsFollowing(data.stats?.isFollowing ?? false);
       setProfileStatus("ready");
       return "ready";
     } catch (err) {
@@ -107,6 +108,24 @@ export default function UsernameProfilePage() {
     }
   }, [profile?.id]);
 
+  // Fetch user media
+  const fetchMedia = useCallback(async () => {
+    if (!profile?.id) return;
+    
+    setMediaLoading(true);
+    setMediaError(null);
+    
+    try {
+      const data = await profileService.getUserMedia(profile.id);
+      setMedia(data);
+    } catch (err) {
+      console.error('Media fetch error:', err);
+      setMediaError("Failed to load media");
+    } finally {
+      setMediaLoading(false);
+    }
+  }, [profile?.id]);
+
   // Load data on mount and when username changes
   useEffect(() => {
     if (isOwnProfile) return; // Don't fetch if own profile (will redirect)
@@ -115,52 +134,15 @@ export default function UsernameProfilePage() {
       const status = await fetchProfile();
       if (status === "ready") {
         await fetchPosts();
+        if (activeTab === "media") {
+          await fetchMedia();
+        }
       }
     };
 
     void loadData();
-  }, [username, isOwnProfile, fetchProfile, fetchPosts]);
-
-  // Handle follow/unfollow
-  const handleFollowToggle = async () => {
-    if (!profile?.id || followLoading) return;
-    
-    setFollowLoading(true);
-    try {
-      if (isFollowing) {
-        await profileService.unfollowUser(profile.id);
-        setIsFollowing(false);
-        if (profile?.stats) {
-          setProfile({
-            ...profile,
-            stats: {
-              ...profile.stats,
-              followers: (profile.stats.followers || 0) - 1,
-              isFollowing: false,
-            },
-          });
-        }
-      } else {
-        await profileService.followUser(profile.id);
-        setIsFollowing(true);
-        if (profile?.stats) {
-          setProfile({
-            ...profile,
-            stats: {
-              ...profile.stats,
-              followers: (profile.stats.followers || 0) + 1,
-              isFollowing: true,
-            },
-          });
-        }
-      }
-    } catch (err) {
-      console.error('Follow/unfollow error:', err);
-      alert('Failed to update follow status. Please try again.');
-    } finally {
-      setFollowLoading(false);
-    }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [username, isOwnProfile, activeTab]);
 
   // Don't render if redirecting to own profile
   if (!authLoading && isOwnProfile) {
@@ -262,11 +244,9 @@ export default function UsernameProfilePage() {
         <div className="pb-6">
           <ProfileHeader 
             profile={profile.profile}
+            userId={profile.id}
             isOwnProfile={false}
             stats={profile.stats}
-            isFollowing={isFollowing}
-            onFollowToggle={handleFollowToggle}
-            followLoading={followLoading}
           />
         </div>
 
@@ -304,7 +284,23 @@ export default function UsernameProfilePage() {
               <ProfilePosts posts={posts} />
             )
           )}
-          {activeTab === "media" && <ProfileEmptyTab type="media" />}
+          {activeTab === "media" && (
+            mediaLoading ? (
+              <ProfileMedia media={[]} isLoading={true} />
+            ) : mediaError ? (
+              <div className="py-16 flex flex-col items-center gap-4 text-center px-4">
+                <p className="text-muted text-sm sm:text-base">{mediaError}</p>
+                <button
+                  onClick={fetchMedia}
+                  className="px-4 py-2 rounded-full bg-accent text-white text-sm font-medium hover:bg-accent-strong transition-colors"
+                >
+                  Try Again
+                </button>
+              </div>
+            ) : (
+              <ProfileMedia media={media} />
+            )
+          )}
           {activeTab === "about" && <ProfileEmptyTab type="about" />}
           {activeTab === "likes" && <ProfileEmptyTab type="likes" />}
         </div>

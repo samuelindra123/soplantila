@@ -11,6 +11,7 @@ import {
   CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
   UploadPartCommand,
@@ -221,7 +222,22 @@ export class MediaUploadService {
     }
 
     if (tempUpload.confirmedAt) {
-      throw new BadRequestException('Upload already confirmed.');
+      // Idempotent confirm: return existing confirmed media metadata.
+      // New flow stores permanent key in tempKey after confirmation.
+      if (tempUpload.tempKey.startsWith(`${this.tempPrefix}/`)) {
+        throw new BadRequestException(
+          'Upload already confirmed with legacy metadata. Please re-upload this file.',
+        );
+      }
+
+      return {
+        mediaType: tempUpload.mediaType,
+        storageKey: tempUpload.tempKey,
+        publicUrl: this.buildPublicUrl(tempUpload.tempKey),
+        mimeType: tempUpload.mimeType,
+        fileSize: tempUpload.fileSize,
+        originalName: tempUpload.originalName,
+      };
     }
 
     if (tempUpload.expiresAt < new Date()) {
@@ -264,10 +280,13 @@ export class MediaUploadService {
     // Delete temp file
     await this.deleteObject(tempUpload.tempKey);
 
-    // Mark as confirmed
+    // Mark as confirmed and persist permanent key for retry-safe/idempotent processing
     await this.prisma.tempUpload.update({
       where: { id: tempUpload.id },
-      data: { confirmedAt: new Date() },
+      data: {
+        confirmedAt: new Date(),
+        tempKey: permanentKey,
+      },
     });
 
     return {
@@ -289,6 +308,10 @@ export class MediaUploadService {
     }
 
     await this.deleteObject(storageKey);
+  }
+
+  getPublicUrlForStorageKey(storageKey: string): string {
+    return this.buildPublicUrl(storageKey);
   }
 
   private validateUploadRequest(input: UploadRequestInput): void {
@@ -449,6 +472,32 @@ export class MediaUploadService {
     }
 
     try {
+      // Verify source file exists first with retry
+      let retries = 3;
+      let fileExists = false;
+      
+      while (retries > 0 && !fileExists) {
+        try {
+          await this.s3Client.send(
+            new HeadObjectCommand({
+              Bucket: this.bucket,
+              Key: sourceKey,
+            }),
+          );
+          fileExists = true;
+        } catch (headError) {
+          retries--;
+          if (retries > 0) {
+            // Wait 1 second before retry (S3 eventual consistency)
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } else {
+            throw new BadRequestException(
+              'Source file not found. Upload may not have completed. Please try uploading again.',
+            );
+          }
+        }
+      }
+
       await this.s3Client.send(
         new CopyObjectCommand({
           Bucket: this.bucket,
@@ -460,8 +509,11 @@ export class MediaUploadService {
         }),
       );
     } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
       throw new InternalServerErrorException(
-        'Failed to finalize upload. The file may not have been uploaded correctly.',
+        `Failed to finalize upload: ${error.message}`,
       );
     }
   }

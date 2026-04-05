@@ -51,7 +51,7 @@ export class ProfileService {
     };
   }
 
-  async getProfileByUsername(username: string) {
+  async getProfileByUsername(username: string, currentUserId?: string) {
     const profile = await this.prisma.onboardingProfile.findUnique({
       where: { username },
       include: {
@@ -73,6 +73,30 @@ export class ProfileService {
       throw new NotFoundException('User not found.');
     }
 
+    // Check if current user is following this profile
+    let isFollowing = false;
+    if (currentUserId && currentUserId !== profile.user.id) {
+      const followRelation = await this.prisma.userFollow.findUnique({
+        where: {
+          followerId_followingId: {
+            followerId: currentUserId,
+            followingId: profile.user.id,
+          },
+        },
+      });
+      isFollowing = !!followRelation;
+    }
+
+    const friendsCount = await this.prisma.friendship.count({
+      where: {
+        status: 'ACCEPTED',
+        OR: [
+          { requesterId: profile.user.id },
+          { addresseeId: profile.user.id },
+        ],
+      },
+    });
+
     return {
       id: profile.user.id,
       profile: {
@@ -91,6 +115,8 @@ export class ProfileService {
         posts: profile.user._count.posts,
         followers: profile.user._count.followers,
         following: profile.user._count.following,
+        friends: friendsCount,
+        isFollowing,
       },
     };
   }

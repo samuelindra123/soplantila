@@ -6,12 +6,22 @@ import { Trash2Icon, EditIcon, FlagIcon } from "@/components/ui/icons";
 interface PostMenuProps {
   isOpen: boolean;
   onClose: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
+  onEdit?: () => void;
+  onReport?: () => void;
   isOwnPost?: boolean;
-  position?: { top: number; right: number };
+  showInFeed?: boolean;
 }
 
-export function PostMenu({ isOpen, onClose, onDelete, isOwnPost = true, position }: PostMenuProps) {
+export function PostMenu({ 
+  isOpen, 
+  onClose, 
+  onDelete, 
+  onEdit,
+  onReport,
+  isOwnPost = true, 
+  showInFeed = false
+}: PostMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -40,17 +50,27 @@ export function PostMenu({ isOpen, onClose, onDelete, isOwnPost = true, position
 
   if (!isOpen) return null;
 
+  // Hide menu completely for own posts in feed
+  if (showInFeed && isOwnPost) {
+    return null;
+  }
+
   return (
     <div
       ref={menuRef}
-      className="fixed z-50 bg-surface/98 backdrop-blur-xl border border-border-soft/50 rounded-xl shadow-2xl overflow-hidden min-w-[200px] animate-in fade-in zoom-in-95 duration-150"
-      style={position ? { top: `${position.top}px`, right: `${position.right}px` } : {}}
+      className="absolute z-50 bg-surface/98 backdrop-blur-xl border border-border-soft/50 rounded-xl shadow-2xl overflow-hidden min-w-[200px] animate-in fade-in zoom-in-95 duration-150"
+      style={{
+        top: '100%',
+        right: '0',
+        marginTop: '0.25rem'
+      }}
     >
-      {isOwnPost ? (
+      {isOwnPost && !showInFeed ? (
+        // Own post in profile: show edit & delete
         <div className="py-1">
           <button
             onClick={() => {
-              // TODO: Implement edit functionality
+              if (onEdit) onEdit();
               onClose();
             }}
             className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-surface-dark/50 transition-colors text-left group"
@@ -61,7 +81,7 @@ export function PostMenu({ isOpen, onClose, onDelete, isOwnPost = true, position
           <div className="h-px bg-border-soft/30 mx-2" />
           <button
             onClick={() => {
-              onDelete();
+              if (onDelete) onDelete();
               onClose();
             }}
             className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-danger/5 transition-colors text-left group"
@@ -71,10 +91,11 @@ export function PostMenu({ isOpen, onClose, onDelete, isOwnPost = true, position
           </button>
         </div>
       ) : (
+        // Other's post: show report only
         <div className="py-1">
           <button
             onClick={() => {
-              // TODO: Implement report functionality
+              if (onReport) onReport();
               onClose();
             }}
             className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-surface-dark/50 transition-colors text-left group"

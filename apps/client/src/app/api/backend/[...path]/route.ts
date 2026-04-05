@@ -85,6 +85,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
   return handleRequest(request, context);
 }
 
+export async function PUT(request: NextRequest, context: RouteContext) {
+  return handleRequest(request, context);
+}
+
 export async function PATCH(request: NextRequest, context: RouteContext) {
   return handleRequest(request, context);
 }

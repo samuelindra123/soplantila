@@ -263,3 +263,40 @@ export function FlagIcon(props: IconProps) {
     </IconBase>
   );
 }
+
+export function VideoIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m22 8-6 4 6 4V8Z" />
+      <rect x="2" y="6" width="14" height="12" rx="2" />
+    </IconBase>
+  );
+}
+
+export function PlayIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <polygon points="5 3 19 12 5 21 5 3" fill="currentColor" />
+    </IconBase>
+  );
+}
+
+export function SendIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M22 2 11 13" />
+      <path d="M22 2 15 22 11 13 2 9 22 2Z" />
+    </IconBase>
+  );
+}
+
+export function UsersIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </IconBase>
+  );
+}

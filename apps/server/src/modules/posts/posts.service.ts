@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MediaType, PostStatus, ProcessingStatus } from '@prisma/client';
+import { FeedEventsService } from './feed-events.service';
 
 export interface CreatePostMedia {
   mediaType: 'image' | 'video';
@@ -15,13 +16,107 @@ export interface CreatePostMedia {
   duration?: number | null;
 }
 
+export interface InstantPostMedia {
+  mediaType: 'image' | 'video';
+  storageKey: string;
+  publicUrl: string;
+  mimeType: string;
+  fileSize: number;
+  originalName: string;
+  previewImageUrl?: string; // Thumbnail/poster URL for videos
+}
+
 @Injectable()
 export class PostsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly feedEventsService: FeedEventsService,
+  ) {}
+
+  /**
+   * INSTANT POST - Upload media langsung, post langsung PUBLISHED
+   * 
+   * Ini adalah flow utama untuk UX instant:
+   * 1. Media sudah diupload ke storage sebelum method ini dipanggil
+   * 2. Post langsung dibuat dengan status PUBLISHED
+   * 3. Muncul di feed INSTANT tanpa menunggu background processing
+   */
+  async createInstantPost(
+    userId: string,
+    content: string,
+    mediaItems?: InstantPostMedia[],
+  ) {
+    console.log('[PostsService] Creating instant post:', { 
+      userId, 
+      contentLength: content.length, 
+      mediaCount: mediaItems?.length || 0 
+    });
+
+    // Validate content - minimal content atau media harus ada
+    if (!content.trim() && (!mediaItems || mediaItems.length === 0)) {
+      throw new BadRequestException('Post must have content or media.');
+    }
+
+    // Create post with PUBLISHED status immediately
+    const post = await this.prisma.post.create({
+      data: {
+        userId,
+        content: content.trim(),
+        status: PostStatus.PUBLISHED,
+        processingStatus: ProcessingStatus.COMPLETED,
+        mediaUrl: mediaItems && mediaItems.length > 0 ? mediaItems[0].publicUrl : undefined,
+        media: mediaItems && mediaItems.length > 0
+          ? {
+              create: mediaItems.map((m, index) => ({
+                mediaType: m.mediaType === 'image' ? MediaType.IMAGE : MediaType.VIDEO,
+                storageKey: m.storageKey,
+                publicUrl: m.publicUrl,
+                previewImageUrl: m.previewImageUrl, // Thumbnail for videos
+                mimeType: m.mimeType,
+                fileSize: m.fileSize,
+                originalName: m.originalName,
+                sortOrder: index,
+              })),
+            }
+          : undefined,
+      },
+      include: {
+        user: {
+          include: {
+            profile: true,
+          },
+        },
+        media: {
+          orderBy: { sortOrder: 'asc' },
+        },
+        _count: {
+          select: {
+            likes: true,
+          },
+        },
+      },
+    });
+
+    console.log('[PostsService] Instant post created:', { 
+      postId: post.id, 
+      status: post.status,
+      mediaCount: post.media.length,
+    });
+
+    // Format post untuk response dan broadcast
+    const formattedPost = this.formatPost(post, userId);
+
+    // Broadcast new post event via SSE
+    this.feedEventsService.broadcastNewPost(post.id, userId, formattedPost);
+
+    return formattedPost;
+  }
 
   /**
    * Create draft post - immediately saved to DB with DRAFT status
    * Media upload will be processed in background queue
+   * 
+   * OPTIMIZATION: Posts without media are published immediately
    */
   async createDraftPost(userId: string, content: string, uploadIds?: string[]) {
     console.log('[PostsService] Creating draft post:', { 
@@ -30,7 +125,54 @@ export class PostsService {
       uploadIdsCount: uploadIds?.length || 0 
     });
 
-    // Create post with DRAFT status
+    // OPTIMIZATION: If no media, publish immediately (no need for queue)
+    if (!uploadIds || uploadIds.length === 0) {
+      console.log('[PostsService] No media, publishing immediately');
+      
+      const post = await this.prisma.post.create({
+        data: {
+          userId,
+          content,
+          status: PostStatus.PUBLISHED, // ✅ Langsung PUBLISHED
+          processingStatus: ProcessingStatus.COMPLETED,
+        },
+        include: {
+          user: {
+            include: {
+              profile: true,
+            },
+          },
+          media: true,
+          _count: {
+            select: {
+              likes: true,
+            },
+          },
+        },
+      });
+
+      console.log('[PostsService] Post published immediately:', { 
+        postId: post.id, 
+        status: post.status 
+      });
+
+      // Format post untuk broadcast
+      const formattedPost = this.formatPost(post, userId);
+
+      // Broadcast new post event via SSE
+      this.feedEventsService.broadcastNewPost(post.id, userId, formattedPost);
+
+      return {
+        postId: post.id,
+        status: post.status,
+        processingStatus: post.processingStatus,
+        uploadIds: [],
+      };
+    }
+
+    // With media: Create DRAFT and process in background queue
+    console.log('[PostsService] Has media, creating draft for queue processing');
+    
     const post = await this.prisma.post.create({
       data: {
         userId,
@@ -47,7 +189,7 @@ export class PostsService {
       },
     });
 
-    console.log('[PostsService] Draft post created:', { 
+    console.log('[PostsService] Draft post created for queue:', { 
       postId: post.id, 
       status: post.status,
       processingStatus: post.processingStatus 
@@ -59,6 +201,16 @@ export class PostsService {
       processingStatus: post.processingStatus,
       uploadIds: uploadIds || [],
     };
+  }
+
+  async findDraftPosts(userId: string) {
+    return this.prisma.post.findMany({
+      where: {
+        userId,
+        status: PostStatus.DRAFT,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
   async createPost(
@@ -129,6 +281,13 @@ export class PostsService {
     const skip = (safePage - 1) * safeLimit;
 
     console.log('[PostsService] Getting feed:', { currentUserId, page: safePage, limit: safeLimit, skip });
+
+    // Debug: Check all posts status
+    const allPostsCount = await this.prisma.post.groupBy({
+      by: ['status'],
+      _count: true,
+    });
+    console.log('[PostsService] All posts by status:', allPostsCount);
 
     // Only show PUBLISHED posts in feed
     const [posts, total] = await Promise.all([
@@ -311,6 +470,66 @@ export class PostsService {
       storageKeys: post.media.map((m) => m.storageKey),
     };
   }
+  async updatePost(postId: string, userId: string, content: string) {
+    const post = await this.prisma.post.findUnique({
+      where: { id: postId },
+    });
+
+    if (!post) {
+      throw new NotFoundException('Post not found.');
+    }
+
+    if (post.userId !== userId) {
+      throw new ForbiddenException('You are not allowed to edit this post.');
+    }
+
+    // Update only content, media cannot be changed
+    const updatedPost = await this.prisma.post.update({
+      where: { id: postId },
+      data: { content },
+      include: {
+        user: {
+          select: {
+            id: true,
+            emailVerifiedAt: true,
+            profile: {
+              select: {
+                firstName: true,
+                lastName: true,
+                username: true,
+                fotoProfilUrl: true,
+              },
+            },
+          },
+        },
+        media: true,
+        likes: {
+          where: { userId },
+          select: { userId: true },
+        },
+        bookmarks: {
+          where: { userId },
+          select: { userId: true },
+        },
+        _count: {
+          select: {
+            likes: true,
+          },
+        },
+      },
+    });
+
+    // Broadcast update event
+    this.feedEventsService.broadcastUpdatePost(postId, userId, {
+      content: updatedPost.content,
+    });
+
+    return {
+      message: 'Post updated successfully.',
+      data: this.formatPost(updatedPost, userId),
+    };
+  }
+
 
   private formatPost(
     post: {

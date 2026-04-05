@@ -2,28 +2,36 @@
 
 import { UserProfile, ProfileStats } from "@/types/api";
 import { CheckCircle2Icon, MapPinIcon, BriefcaseIcon, CalendarIcon } from "@/components/ui/icons";
+import { FriendButton } from "@/features/friendship/components/friend-button";
+import Link from "next/link";
+import { useState } from "react";
+import { ConnectionsModal } from "./connections-modal";
 
 type ProfileHeaderProps = {
   profile: UserProfile;
+  userId?: string;
   isOwnProfile?: boolean;
   stats?: ProfileStats;
   onEditClick?: () => void;
-  isFollowing?: boolean;
-  onFollowToggle?: () => void;
-  followLoading?: boolean;
 };
 
 export function ProfileHeader({ 
-  profile, 
+  profile,
+  userId,
   isOwnProfile = false, 
   stats, 
   onEditClick,
-  isFollowing = false,
-  onFollowToggle,
-  followLoading = false,
 }: ProfileHeaderProps) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalTab, setModalTab] = useState<"friends" | "followers" | "following">("friends");
+
   const fullName = `${profile.firstName} ${profile.lastName}`;
   const initials = `${profile.firstName[0] || ""}${profile.lastName[0] || ""}`.toUpperCase() || "U";
+
+  const handleOpenModal = (tab: "friends" | "followers" | "following") => {
+    setModalTab(tab);
+    setModalOpen(true);
+  };
 
   return (
     <div className="relative">
@@ -75,31 +83,14 @@ export function ProfileHeader({
               </button>
             ) : (
               <div className="flex items-center gap-2">
-                <button 
-                  onClick={onFollowToggle}
-                  disabled={followLoading}
-                  className={`px-6 py-2.5 rounded-full font-semibold text-sm transition-all hover:shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${
-                    isFollowing
-                      ? 'bg-surface-dark border border-border-soft hover:bg-surface hover:border-accent/30 text-foreground'
-                      : 'bg-accent text-white hover:bg-accent-strong'
-                  }`}
-                  aria-label={isFollowing ? `Unfollow ${profile.username}` : `Follow ${profile.username}`}
-                >
-                  {followLoading ? (
-                    <span className="flex items-center gap-2">
-                      <span className="w-4 h-4 rounded-full border-2 border-current border-t-transparent animate-spin" />
-                      {isFollowing ? 'Unfollowing...' : 'Following...'}
-                    </span>
-                  ) : (
-                    isFollowing ? 'Following' : 'Follow'
-                  )}
-                </button>
-                <button 
+                {userId && <FriendButton targetUserId={userId} />}
+                <Link 
+                  href={`/messenger?userId=${userId}`}
                   className="px-6 py-2.5 rounded-full bg-surface-dark border border-border-soft hover:bg-surface hover:border-accent/30 font-semibold text-sm transition-all hover:shadow-md active:scale-95"
                   aria-label={`Message ${profile.username}`}
                 >
-                  Message
-                </button>
+                  Kirim Pesan
+                </Link>
               </div>
             )}
           </div>
@@ -156,17 +147,35 @@ export function ProfileHeader({
 
             {/* Stats */}
             <div className="flex items-center gap-5 sm:gap-6 text-sm pt-2">
-              <button className="flex items-center gap-1.5 hover:underline focus:outline-none focus:underline" aria-label={`${formatCount(stats?.followers ?? 0)} followers`}>
+              <button 
+                onClick={() => handleOpenModal("friends")}
+                className="flex items-center gap-1.5 hover:underline focus:outline-none focus:underline" 
+                aria-label={`${formatCount(stats?.friends ?? 0)} teman`}
+              >
+                <span className="font-bold text-foreground text-base">
+                  {formatCount(stats?.friends ?? 0)}
+                </span>
+                <span className="text-muted">Teman</span>
+              </button>
+              <button 
+                onClick={() => handleOpenModal("followers")}
+                className="flex items-center gap-1.5 hover:underline focus:outline-none focus:underline" 
+                aria-label={`${formatCount(stats?.followers ?? 0)} pengikut`}
+              >
                 <span className="font-bold text-foreground text-base">
                   {formatCount(stats?.followers ?? 0)}
                 </span>
-                <span className="text-muted">Followers</span>
+                <span className="text-muted">Pengikut</span>
               </button>
-              <button className="flex items-center gap-1.5 hover:underline focus:outline-none focus:underline" aria-label={`${formatCount(stats?.following ?? 0)} following`}>
+              <button 
+                onClick={() => handleOpenModal("following")}
+                className="flex items-center gap-1.5 hover:underline focus:outline-none focus:underline" 
+                aria-label={`${formatCount(stats?.following ?? 0)} mengikuti`}
+              >
                 <span className="font-bold text-foreground text-base">
                   {formatCount(stats?.following ?? 0)}
                 </span>
-                <span className="text-muted">Following</span>
+                <span className="text-muted">Mengikuti</span>
               </button>
               <div className="flex items-center gap-1.5" aria-label={`${formatCount(stats?.posts ?? 0)} posts`}>
                 <span className="font-bold text-foreground text-base">
@@ -178,6 +187,16 @@ export function ProfileHeader({
           </div>
         </div>
       </div>
+
+      {/* Connections Modal */}
+      {userId && (
+        <ConnectionsModal
+          userId={userId}
+          isOpen={modalOpen}
+          onClose={() => setModalOpen(false)}
+          defaultTab={modalTab}
+        />
+      )}
     </div>
   );
 }
